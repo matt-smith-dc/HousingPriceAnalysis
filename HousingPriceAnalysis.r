@@ -104,21 +104,48 @@ housing.mortgage.data <- housing.data %>% merge(y=housing.dates.rates,
 housing.mortgage.data <- housing.mortgage.data[
   order(housing.mortgage.data$RegionName,
         housing.mortgage.data$Month), ]
+
 housing.mortgage.data <- housing.mortgage.data %>%
   group_by(RegionName) %>%
-  mutate( d1Value = (Value/lag(Value)) - 1,
-          d3MortgageRate = (mortgage.30.yr/lag(mortgage.30.yr, n=3)-1)) %>%
+  mutate( qoq.Value = (Value/lag(Value, n=3)) - 1,
+          qoq.Mortgage.Rate = (mortgage.30.yr/lag(mortgage.30.yr, n=3)-1),
+          yoy.Value = (Value/lag(Value, n=12)) - 1,
+          yoy.Mortgage.Rate = (mortgage.30.yr/lag(mortgage.30.yr, n=12)-1)) %>%
   ungroup()
 
+avg.value <- housing.mortgage.data %>%
+  filter(!is.na(Value)) %>% group_by(Month, State) %>%
+  mutate(state.mean.value = mean(Value),
+         state.sd.value = sd(Value)) %>% ungroup() %>% 
+  arrange(Month,State, RegionName) %>%
+  mutate(scaled.value = ifelse(state.sd.value == 0, NA,
+                               (Value - state.mean.value)/state.sd.value)) %>%
+  select(Month,State,RegionName,scaled.value)
+
+avg.yoy <- housing.mortgage.data %>%
+  filter(!is.na(yoy.Value)) %>% group_by(Month, State) %>%
+  mutate(state.mean.yoy = mean(yoy.Value),
+         state.sd.yoy = sd(yoy.Value)) %>% ungroup() %>% 
+  arrange(Month,State, RegionName) %>%
+  mutate(scaled.yoy.Value = ifelse(state.sd.yoy == 0, NA,
+                                   (yoy.Value - state.mean.yoy)/state.sd.yoy)) %>%
+  select(Month,State,RegionName,scaled.yoy.Value)
+
+housing.mortgage.data <- housing.mortgage.data %>%
+  left_join(x=., y=avg.value, by=c('Month','State','RegionName'))
+housing.mortgage.data <- housing.mortgage.data %>%
+  left_join(x=., y=avg.yoy, by=c('Month','State','RegionName'))
+
+
 housing.mortgage.data %>% #filter(Month < '2015-12-31' & StateName=='VA') %>%
-  select(d1Value, d3MortgageRate) %>%
-  filter(!is.na(d1Value) & !is.na(d3MortgageRate)) %>%
-  summarize(across(c(d3MortgageRate), ~ cor(.x, d1Value)))
+  select(qoq.Value, qoq.Mortgage.Rate) %>%
+  filter(!is.na(qoq.Value) & !is.na(qoq.Mortgage.Rate)) %>%
+  summarize(across(c(qoq.Mortgage.Rate), ~ cor(.x, qoq.Value)))
 
 #housing.mortgage.data %>% filter(Month < '2015-12-31' & StateName == 'VA') %>%
 #  select
 housing.mortgage.data %>% filter(Month < '2015-12-31' & StateName == 'VA') %>%
-  ggplot(., aes(x=d1Value, y=d3MortgageRate)) +
+  ggplot(., aes(x=qoq.Value, y=qoq.Mortgage.Rate)) +
   geom_point()
 
 ################################################################################
@@ -135,21 +162,23 @@ zipcodes <- get_zipcode_data(data.path, zips.year, state)
 
 combined.data <- merge(x=state.housing.data, y=zipcodes, by.x='RegionName', by.y='ZCTA', all.y=TRUE)
 
-
-low <- min(combined.data[!is.na(combined.data$Value), 'Value'])
-avg <- mean(combined.data[!is.na(combined.data$Value), 'Value'])
-high <- max(combined.data[!is.na(combined.data$Value), 'Value'])
-
 us.states <- states()
 state.boundary <- us.states %>% filter(STUSPS == state)
 
+val.col <- 'Value'
+
+low <- min(combined.data[!is.na(combined.data[[val.col]]), val.col])
+avg <- mean(combined.data[!is.na(combined.data[[val.col]]), val.col])
+high <- max(combined.data[!is.na(combined.data[[val.col]]), val.col])
+
 p <- combined.data %>% ggplot() +
   geom_sf(data = state.boundary)+
-  geom_sf(aes(geometry=geometry, fill = Value,
-              text = paste(RegionName, ': $', format(
-                Value, bigmark=',',scientific=FALSE))))+
+  geom_sf(aes(geometry=geometry, fill = .data[[val.col]],
+              text = paste(RegionName, ': ', format(
+                .data[[val.col]], bigmark=',',scientific=FALSE))))+
   scale_fill_viridis_c(option = "plasma", na.value="white",
                        labels = comma, breaks=c(low,avg,high))
+
 
 pg <- ggplotly(p, tooltip = 'text')
 pg
@@ -229,4 +258,3 @@ server <- function(input, output) {
 }
 
 shinyApp(ui, server)
-
